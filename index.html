@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#090d16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MeloAudio" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <title>MeloAudible • Audiolibros Offline & Traductor PDF/Audible</title>
+  <link rel="stylesheet" href="./styles.css?v=7" />
+</head>
+<body>
+  <!-- Notificación flotante -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Barra superior -->
+  <header class="top-header">
+    <div class="header-inner">
+      <div class="brand" onclick="switchTab('library')">
+        <div class="brand-icon">🎧</div>
+        <span>MeloAudible</span>
+      </div>
+      <div class="header-actions">
+        <button class="close-sheet-btn" style="padding: 6px 10px; font-size: 0.76rem;" onclick="openActivityModal()" title="Ver historial y minutos escuchados">
+          📈 Actividad
+        </button>
+        <button id="installPwaBtn" class="install-btn" style="display: none;" onclick="promptInstallPWA()">
+          📲 Instalar App
+        </button>
+        <button id="connPill" class="conn-pill" onclick="openServerModal()">
+          <span class="conn-dot"></span>
+          <span id="connText">Modo Local</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Banner en vivo cuando la PC está traduciendo/generando voz -->
+    <div id="liveWorkerBanner" class="live-worker-banner" style="display: none;" onclick="switchTab('queue')">
+      <div class="lwb-top">
+        <div class="lwb-status">
+          <span class="pulse-dot"></span>
+          <span id="lwbTitle">Procesando audiolibro en PC...</span>
+        </div>
+        <span id="lwbCount" style="color: var(--text-secondary); font-weight: 800;">0%</span>
+      </div>
+      <div class="progress-track" style="margin-bottom: 6px;">
+        <div id="lwbBookFill" class="progress-fill"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 0.74rem; color: var(--muted);">
+        <span id="lwbStepDetail">Iniciando...</span>
+        <span id="lwbUpdated">En vivo</span>
+      </div>
+    </div>
+
+    <!-- VISTA 1: BIBLIOTECA -->
+    <section id="viewLibrary">
+      <!-- Sub-vista A: Lista de Libros -->
+      <div id="libraryListContainer">
+        <div id="continueListeningBox" style="display: none;"></div>
+
+        <!-- Buscador instantáneo y Ordenamiento -->
+        <div class="search-sort-bar">
+          <input
+            type="search"
+            id="librarySearchInput"
+            class="form-input search-input"
+            placeholder="🔍 Buscar libro o autor..."
+            oninput="onLibrarySearchInput(this.value)"
+          />
+          <select id="librarySortSelect" class="form-select sort-select" onchange="onLibrarySortChange(this.value)">
+            <option value="recent_listen">🕒 Recientes</option>
+            <option value="progress">📊 Mayor avance</option>
+            <option value="added">🆕 Recién agregados</option>
+            <option value="title">🔤 Título A-Z</option>
+          </select>
+        </div>
+
+        <div class="filter-bar">
+          <button class="chip active" onclick="setLibraryFilter('all', this)">📚 Todos</button>
+          <button class="chip" onclick="setLibraryFilter('in_progress', this)">🎧 En Curso</button>
+          <button class="chip" onclick="setLibraryFilter('completed', this)">✅ Ya Escuchados</button>
+          <button class="chip" onclick="setLibraryFilter('unstarted', this)">⚪ Sin Empezar</button>
+          <button class="chip" onclick="setLibraryFilter('offline', this)">📱 En Teléfono</button>
+        </div>
+        <div id="booksGrid" class="books-grid"></div>
+      </div>
+
+      <!-- Sub-vista B: Detalle de un Libro y sus Capítulos -->
+      <div id="bookDetailContainer" style="display: none;">
+        <button class="back-btn" onclick="closeBookDetail()">← Volver a Mi Biblioteca</button>
+        <div id="bookDetailHero" class="book-hero"></div>
+
+        <!-- Barra de progreso de descarga al teléfono -->
+        <div id="offlineDownloadCard" class="section-card" style="display: none; padding: 12px 16px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 700; margin-bottom: 6px;">
+            <span id="offlineDlStatus" style="color: var(--emerald);">⬇ Guardando en memoria del teléfono...</span>
+            <span id="offlineDlPct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="offlineDlFill" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <button class="chip active" onclick="setChapterFilter('all', this)">Todos los capítulos</button>
+          <button class="chip" onclick="setChapterFilter('unplayed', this)">📍 Por escuchar</button>
+          <button class="chip" onclick="setChapterFilter('listened', this)">✅ Ya escuchados</button>
+          <button class="chip" onclick="setChapterFilter('in_progress', this)">⏳ A mitad</button>
+          <button class="chip" onclick="setChapterFilter('offline', this)">📱 Offline</button>
+        </div>
+
+        <div id="chaptersList" class="chapters-list"></div>
+      </div>
+    </section>
+
+    <!-- VISTA 2: AGREGAR LIBRO (PDF EN/ES + AUDIBLE PC) -->
+    <section id="viewCreate" style="display: none;">
+      <!-- Tarjeta 1: Generar desde PDF -->
+      <div class="section-card">
+        <h2>📄 Crear Audiolibro desde PDF (Inglés o Español)</h2>
+        <p class="desc">
+          Sube un libro o documento en PDF. Si está en <strong>inglés</strong>, lo traducirá automáticamente al español por capítulos; si ya está en <strong>español</strong>, generará directamente la narración.
+        </p>
+
+        <input type="file" id="pdfFileInput" accept=".pdf,application/pdf" style="display: none;" onchange="onPdfSelected(this)" />
+        <div id="pdfDropzone" class="dropzone" onclick="document.getElementById('pdfFileInput').click()">
+          <div style="font-size: 2rem; margin-bottom: 6px;">📄</div>
+          <div id="pdfSelectedName" style="font-weight: 800; color: var(--text);">
+            Toca aquí para elegir un archivo PDF
+          </div>
+          <div style="font-size: 0.78rem; color: var(--muted); margin-top: 4px;">
+            También puedes dejar tus PDFs en la carpeta <code>entrada_pdfs/</code> de tu PC
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Título del libro (opcional)</label>
+            <input type="text" id="pdfTitleInput" class="form-input" placeholder="Se detecta del PDF si lo dejas vacío" />
+          </div>
+          <div class="form-group">
+            <label>Autor (opcional)</label>
+            <input type="text" id="pdfAuthorInput" class="form-input" placeholder="Ej. Ryan Holiday, Alex Hormozi..." />
+          </div>
+          <div class="form-group">
+            <label>Idioma del PDF</label>
+            <select id="pdfLangSelect" class="form-select">
+              <option value="auto">✨ Detectar automático (Inglés o Español)</option>
+              <option value="en">🇬🇧 PDF en Inglés → Traducir y narrar en Español</option>
+              <option value="es">🇪🇸 PDF en Español → Narrar directo en Español</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Voz del Narrador en Español</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select id="pdfVoiceSelect" class="form-select" style="flex: 1;">
+                <optgroup label="👩 Voces Femeninas de Alta Calidad (Gemini 3.8 Estudio • Gratis)">
+                  <option value="gemini-sulafat">✨ Sulafat (Estudio • Femenina Cálida y Envolvente • Recomendada)</option>
+                  <option value="gemini-kore">✨ Kore (Estudio • Femenina Firme, Clara y Ejecutiva)</option>
+                  <option value="gemini-despina">✨ Despina (Estudio • Femenina Suave, Pulida y Elegante)</option>
+                  <option value="gemini-aoede">✨ Aoede (Estudio • Femenina Fresca y Conversacional)</option>
+                  <option value="gemini-es-419-podcaster-9">🌎 Podcaster Latam 9 (Argentina • Femenina Resonante de Radio)</option>
+                  <option value="gemini-es-419-podcaster-2">🌎 Podcaster Latam 2 (México NPR • Femenina Profesional)</option>
+                  <option value="es-MX-DaliaNeural">🎙️ Dalia (Femenina Latam Neural • Ilimitada)</option>
+                </optgroup>
+                <optgroup label="👨 Voces Masculinas de Estudio (Gemini 3.8 Estudio • Gratis)">
+                  <option value="gemini-charon">✨ Charon (Estudio • Masculina Grave e Informativa)</option>
+                  <option value="gemini-orus">✨ Orus (Estudio • Masculina Firme y Ejecutiva)</option>
+                  <option value="gemini-algieba">✨ Algieba (Estudio • Masculina Suave y Pausada)</option>
+                  <option value="gemini-sadaltager">✨ Sadaltager (Estudio • Masculina Reflexiva y Sabia)</option>
+                  <option value="gemini-puck">✨ Puck (Estudio • Masculina Dinámica y Cercana)</option>
+                  <option value="gemini-es-419-podcaster-1">🌎 Podcaster Latam 1 (México • Masculina Cálida)</option>
+                  <option value="gemini-es-419-podcaster-8">🌎 Podcaster Latam 8 (Argentina • Masculina Madura)</option>
+                  <option value="gemini-es-419-tutor-2">🌎 Mentor Latam 2 (México • Masculina Resonante)</option>
+                  <option value="gemini-es-es-podcaster-7">🇪🇸 Locutor España 7 (Castellano • Masculina Directa)</option>
+                  <option value="gemini-alternar">🔄 Alternar Voces Estudio por Capítulo</option>
+                </optgroup>
+                <optgroup label="🎙️ Voces Neurales Ilimitadas (Sin Límite Diario)">
+                  <option value="en-US-BrianMultilingualNeural">🎙️ Brian (Copilot Cálido • Ilimitado)</option>
+                  <option value="en-US-AndrewMultilingualNeural">🎙️ Andrew (Copilot Profundo • Ilimitado)</option>
+                  <option value="es-MX-JorgeNeural">🎙️ Jorge (Latinoamérica • Ilimitado)</option>
+                  <option value="es-ES-AlvaroNeural">🎙️ Álvaro (España • Ilimitado)</option>
+                </optgroup>
+              </select>
+              <button
+                type="button"
+                id="previewSelectedVoiceBtn"
+                class="btn btn-secondary"
+                style="padding: 10px 14px; white-space: nowrap;"
+                onclick="previewVoiceSample(document.getElementById('pdfVoiceSelect').value, this)"
+              >
+                🔊 Probar Voz
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <button id="uploadPdfBtn" class="btn btn-primary" style="width: 100%;" onclick="uploadAndStartPdf()">
+          🚀 Subir PDF y Generar Audiolibro en Español
+        </button>
+      </div>
+
+      <!-- Tarjeta 1B: Estudio de Prueba de Voces (Femeninas y Masculinas) -->
+      <div class="section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+          <h2>🔊 Probador de Voces en Vivo (Femeninas y Masculinas)</h2>
+          <span class="badge offline">Muestras de Cautivar (Captivate)</span>
+        </div>
+        <p class="desc">
+          Escucha cómo suena cada voz narrando un fragmento en español antes de elegirla para tu libro. Toca <strong>▶ Escuchar Muestra</strong> para oírla al instante o <strong>✓ Usar en Cautivar</strong> para asignarla directamente.
+        </p>
+        <div id="voiceTesterList" class="chapters-list"></div>
+      </div>
+
+      <!-- Tarjeta 2: Traducir Libros de Audible descargados en la PC -->
+      <div class="section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h2>🎧 Tus Libros de Audible en la PC (Libation)</h2>
+          <button class="close-sheet-btn" onclick="fetchLocalAudibleBooks()">🔄 Actualizar</button>
+        </div>
+        <p class="desc">
+          Detectados automáticamente desde <code>C:\Users\Ronal\Libation\Books</code> y <code>entrada_audible/</code>. Con 1 clic se extraen sus capítulos, se transcriben con Whisper, se traducen al español y se narran con la voz de Brian.
+        </p>
+        <div id="audibleLocalList" class="chapters-list">
+          <div style="color: var(--muted); font-size: 0.85rem;">Buscando audiolibros de Audible en tu PC...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VISTA 3: COLA Y PROGRESO EN VIVO -->
+    <section id="viewQueue" style="display: none;">
+      <div class="section-card">
+        <h2>✨ Pool Multi-Proyecto Gemini 3.8 TTS (Voz Charon • Costo $0)</h2>
+        <p class="desc">
+          Cada proyecto gratuito de <strong>Google AI Studio</strong> aporta hasta <strong>30 peticiones diarias gratis (~4.1 horas de audiolibro/día)</strong> rotando entre <code>gemini-3.8-flash-tts</code>, <code>gemini-3.8-flash-lite-tts</code> y <code>gemini-3.1-flash-tts</code> con la voz <strong>Charon</strong>. Agrega claves de varios proyectos gratuitos para multiplicar tu velocidad sin pagar un centavo:
+        </p>
+        <div id="geminiPoolBox" style="margin-bottom: 12px;"></div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <input
+            type="text"
+            id="geminiNewKeyInput"
+            class="form-input"
+            style="flex: 1; min-width: 220px;"
+            placeholder="Pega 1 o más API Keys de proyectos gratuitos (AQ... o AIza...)"
+          />
+          <button class="btn btn-primary" onclick="addGeminiKeysFromInput()">➕ Agregar Proyecto(s)</button>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <h2>⚙️ Progreso de Traducción y Generación en PC</h2>
+        <p class="desc">
+          💡 <strong>Persistencia activa:</strong> Si apagas la PC mientras se traduce un audiolibro de Audible o un PDF, el avance queda guardado por capítulo y sub-bloque. Al encender la PC y abrir <code>iniciar_pwa.bat</code> continuará automáticamente donde quedó.
+        </p>
+        <div id="queueBooksList" class="books-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Mini Reproductor Fijo Inferior -->
+  <div id="miniPlayer" class="mini-player" style="display: none;">
+    <div class="mini-player-inner">
+      <div class="mp-top">
+        <div class="mp-info" onclick="openFullPlayer()">
+          <img id="mpCover" class="mp-thumb" src="./icons/icon.svg" alt="Cover" />
+          <div class="mp-titles">
+            <div id="mpChapterTitle" class="mp-ch-title">Selecciona un capítulo</div>
+            <div id="mpBookSubtitle" class="mp-book-sub">MeloAudible</div>
+          </div>
+        </div>
+        <div class="mp-controls">
+          <button class="mp-btn" onclick="skipSeconds(-15)" title="Retroceder 15s">↺ 15s</button>
+          <button id="mpPlayBtn" class="mp-btn play" onclick="togglePlay()">▶</button>
+          <button class="mp-btn" onclick="skipSeconds(15)" title="Adelantar 15s">15s ↻</button>
+          <button class="mp-btn" onclick="openFullPlayer()" title="Expandir reproductor">▲</button>
+        </div>
+      </div>
+      <div class="progress-track" style="height: 4px; cursor: pointer;" onclick="seekFromMiniBar(event)">
+        <div id="mpProgressFill" class="progress-fill gold"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Elemento de Audio Global (preload auto + playsinline para persistencia en segundo plano Android) -->
+  <audio id="mainAudio" preload="auto" playsinline></audio>
+
+  <!-- Modal Reproductor Expandido Estilo Audible -->
+  <div id="fullPlayerModal" class="modal-overlay" onclick="if(event.target===this) closeFullPlayer()">
+    <div class="modal-sheet">
+      <div class="sheet-header">
+        <span id="fpOfflineBadge" class="badge offline">📱 Reproduciendo</span>
+        <button class="close-sheet-btn" onclick="closeFullPlayer()">▼ Minimizar</button>
+      </div>
+
+      <img id="fpCover" class="full-player-cover" src="./icons/icon.svg" alt="Portada" />
+      <div style="text-align: center; margin-bottom: 12px;">
+        <h3 id="fpChapterTitle" style="font-size: 1.12rem; font-weight: 800; color: var(--text);">Capítulo</h3>
+        <div id="fpBookTitle" style="font-size: 0.85rem; color: var(--muted); margin-top: 3px;">Libro</div>
+        <div id="fpRemainingInfo" style="font-size: 0.74rem; color: var(--accent-hover); font-weight: 700; margin-top: 4px;"></div>
+      </div>
+
+      <!-- Barra de tiempo interactiva -->
+      <div style="margin-bottom: 14px;">
+        <input
+          type="range"
+          id="fpScrubber"
+          min="0"
+          max="100"
+          value="0"
+          step="0.1"
+          style="width: 100%; accent-color: #f59e0b; cursor: pointer;"
+          oninput="onScrubInput(this.value)"
+        />
+        <div style="display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--muted); margin-top: 4px;">
+          <span id="fpCurrentTime">00:00</span>
+          <span id="fpSleepIndicator" style="color: var(--accent-hover); font-weight: 700;"></span>
+          <span id="fpDuration">00:00</span>
+        </div>
+      </div>
+
+      <!-- Controles principales de transporte -->
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 14px;">
+        <button class="btn btn-secondary" onclick="prevChapter()">⏮ Ant.</button>
+        <button class="btn btn-secondary" onclick="skipSeconds(-15)">↺ -15s</button>
+        <button id="fpPlayBtn" class="btn btn-primary" onclick="togglePlay()">▶ Reproducir</button>
+        <button class="btn btn-secondary" onclick="skipSeconds(15)">+15s ↻</button>
+        <button class="btn btn-secondary" onclick="nextChapter()">Sig. ⏭</button>
+      </div>
+
+      <!-- Velocidades finas de narración -->
+      <div class="speed-bar">
+        <button class="sp-pill active" onclick="setPlaybackRate(1.0, this)">1x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(1.1, this)">1.1x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(1.2, this)">1.2x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(1.35, this)">1.35x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(1.5, this)">1.5x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(1.75, this)">1.75x</button>
+        <button class="sp-pill" onclick="setPlaybackRate(2.0, this)">2x</button>
+      </div>
+
+      <!-- Marcadores de audio, temporizador de sueño, reinicio y texto offline -->
+      <div style="display: flex; gap: 7px; justify-content: center; flex-wrap: wrap;">
+        <button class="close-sheet-btn" style="border-color: rgba(245,158,11,0.5); color: #fbbf24;" onclick="saveQuickBookmarkFromPlayer()">
+          🔖 Guardar Cita / Minuto
+        </button>
+        <button class="close-sheet-btn" onclick="togglePlayerBookmarksList()">📑 Notas (<span id="fpBookmarksCount">0</span>)</button>
+        <button class="close-sheet-btn" onclick="cycleSleepTimer()">🌙 Sleep</button>
+        <button class="close-sheet-btn" onclick="toggleChapterTranscript()">📖 Texto ES</button>
+        <button class="close-sheet-btn" onclick="restartCurrentChapter()">↺ 00:00</button>
+      </div>
+
+      <div id="fpBookmarksBox" class="transcript-box" style="display: none; max-height: 200px;"></div>
+      <div id="fpTranscriptBox" class="transcript-box" style="display: none;">Cargando texto del capítulo...</div>
+    </div>
+  </div>
+
+  <!-- Modal de Actividad e Historial Diario de Escucha -->
+  <div id="activityModal" class="modal-overlay" onclick="if(event.target===this) closeActivityModal()">
+    <div class="modal-sheet">
+      <div class="sheet-header">
+        <h3 style="font-size: 1.05rem; font-weight: 800;">📈 Tu Actividad e Historial de Escucha</h3>
+        <button class="close-sheet-btn" onclick="closeActivityModal()">✕ Cerrar</button>
+      </div>
+      <div id="activityModalContent"></div>
+    </div>
+  </div>
+
+  <!-- Modal de Conexión a PC / GitHub Pages & Almacenamiento -->
+  <div id="serverModal" class="modal-overlay" onclick="if(event.target===this) closeServerModal()">
+    <div class="modal-sheet">
+      <div class="sheet-header">
+        <h3 style="font-size: 1.05rem; font-weight: 800;">☁️ App Fija GitHub Pages & Sincronización PC</h3>
+        <button class="close-sheet-btn" onclick="closeServerModal()">✕ Cerrar</button>
+      </div>
+
+      <p style="font-size: 0.82rem; color: var(--muted); margin-bottom: 12px;">
+        Todo tu progreso y capítulos descargados se guardan <strong>100% en tu teléfono</strong> y funcionan sin internet. Cuando enciendas tu PC, los avances offline pendientes (<strong id="pendingOutboxCountText">0</strong>) se sincronizarán solos.
+      </p>
+
+      <!-- Tarjeta de Enlace Permanente GitHub Pages con Auto-Descubrimiento Cifrado -->
+      <div id="ghPagesPairingBox" style="display: none; background: rgba(245, 158, 11, 0.11); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; padding: 12px; margin-bottom: 12px;">
+        <div style="font-size: 0.75rem; color: #fbbf24; font-weight: 800; margin-bottom: 4px;">
+          ⭐ LINK FIJO GITHUB PAGES (INSTÁLALO UNA SOLA VEZ EN TU CELULAR):
+        </div>
+        <div id="ghPagesUrlText" style="font-size: 0.84rem; font-weight: 800; word-break: break-all; color: var(--text); margin-bottom: 8px;"></div>
+        <div style="font-size: 0.74rem; color: var(--muted); margin-bottom: 8px;">
+          Al abrir este link de emparejamiento 1 sola vez en tu celular, tu teléfono descubrirá automáticamente el nuevo túnel de tu PC cada día sin volver a pegar links.
+        </div>
+        <button class="btn btn-primary" style="padding: 8px 12px; font-size: 0.78rem; width: 100%;" onclick="copyPairingLink()">
+          📋 Copiar Link Permanente de Emparejamiento para mi Celular
+        </button>
+      </div>
+
+      <div id="detectedTunnelBox" style="display: none; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px; padding: 12px; margin-bottom: 14px;">
+        <div style="font-size: 0.76rem; color: #34d399; font-weight: 800; margin-bottom: 4px;">
+          🌐 TÚNEL CLOUDFLARE ACTIVO AHORA EN TU PC:
+        </div>
+        <div id="detectedTunnelUrl" style="font-size: 0.86rem; font-weight: 800; word-break: break-all; color: var(--text); margin-bottom: 8px;"></div>
+        <button class="btn btn-secondary" style="padding: 7px 12px; font-size: 0.78rem;" onclick="copyDetectedTunnel()">
+          📋 Copiar Túnel Directo
+        </button>
+      </div>
+
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label>URL del Servidor PC (Automática o Manual)</label>
+        <input
+          type="text"
+          id="serverUrlInput"
+          class="form-input"
+          placeholder="Ej: https://cuatro-palabras-aqui.trycloudflare.com"
+        />
+        <div id="autoPairStatusHint" style="font-size: 0.74rem; color: var(--emerald); margin-top: 4px;"></div>
+      </div>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <button class="btn btn-primary" onclick="saveServerUrl()">🔗 Conectar y Sincronizar</button>
+        <button class="btn btn-secondary" onclick="discoverEncryptedTunnelNow()">🔄 Auto-Detectar PC</button>
+      </div>
+
+      <div style="border-top: 1px solid var(--border); padding-top: 12px; font-size: 0.8rem; color: var(--muted); display: flex; justify-content: space-between;">
+        <span>💾 Espacio usado en este dispositivo:</span>
+        <strong id="storageUsageText" style="color: var(--text);">Calculando...</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- Barra de Navegación Inferior -->
+  <nav class="bottom-nav">
+    <button id="navLibrary" class="nav-item active" onclick="switchTab('library')">
+      <span class="nav-icon">📚</span>
+      <span>Biblioteca</span>
+    </button>
+    <button id="navCreate" class="nav-item" onclick="switchTab('create')">
+      <span class="nav-icon">➕</span>
+      <span>Agregar PDF / Audible</span>
+    </button>
+    <button id="navQueue" class="nav-item" onclick="switchTab('queue')">
+      <span class="nav-icon">⚙️</span>
+      <span>Progreso PC</span>
+    </button>
+  </nav>
+
+  <script src="./db.js?v=7"></script>
+  <script src="./app.js?v=7"></script>
+</body>
+</html>
