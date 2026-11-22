@@ -110,11 +110,58 @@ async function decryptTunnelSyncPayload(encObj, secretHex) {
   return decoded && decoded.url ? String(decoded.url).trim() : null;
 }
 
+async function _fetchEncryptedSyncJson() {
+  // 1. Vía instantánea (<150ms, sin esperar compilación de GitHub Pages ni caché CDN)
+  try {
+    const ctrlApi = new AbortController();
+    const tApi = setTimeout(() => ctrlApi.abort(), 2800);
+    const apiRes = await fetch(
+      'https://api.github.com/repos/Ronalses/melo-audible/contents/tunnel_sync.json?t=' + Date.now(),
+      { signal: ctrlApi.signal, cache: 'no-store' }
+    );
+    clearTimeout(tApi);
+    if (apiRes.ok) {
+      const meta = await apiRes.json();
+      if (meta && meta.content) {
+        const rawJson = atob(String(meta.content).replace(/\s+/g, ''));
+        return JSON.parse(rawJson);
+      }
+    }
+  } catch (_) {}
+
+  // 2. Respaldo directo desde GitHub Pages estático
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
+  const isGhPages = window.location.hostname.endsWith('github.io');
+  const urlToFetch = (isGhPages ? './tunnel_sync.json' : GH_PAGES_DISCOVERY_URL) + '?t=' + Date.now();
+  const res = await fetch(urlToFetch, { signal: ctrl.signal, cache: 'no-store' });
+  clearTimeout(timer);
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+async function _resolveEncryptedTunnelUrl() {
+  const secret = localStorage.getItem('melo_pair_secret') || '';
+  if (!secret || !navigator.onLine) return null;
+  try {
+    const encData = await _fetchEncryptedSyncJson();
+    if (!encData) return null;
+    const decryptedUrl = await decryptTunnelSyncPayload(encData, secret);
+    if (decryptedUrl && decryptedUrl.startsWith('https://')) {
+      localStorage.setItem('melo_server_url', decryptedUrl);
+      const inp = document.getElementById('serverUrlInput');
+      if (inp) inp.value = decryptedUrl;
+      return decryptedUrl;
+    }
+  } catch (_) {}
+  return null;
+}
+
 async function discoverEncryptedTunnelNow(silent = false) {
   const secret = localStorage.getItem('melo_pair_secret') || '';
   if (!secret) {
     if (!silent) {
-      showToast('⚠️ Abre primero el Link Permanente de Emparejamiento desde tu PC.');
+      showToast('⚠️ Pega tu Link de Emparejamiento (#pair=...) arriba o ábrelo 1 vez para vincular este dispositivo.');
     }
     return null;
   }
@@ -122,33 +169,23 @@ async function discoverEncryptedTunnelNow(silent = false) {
     if (!silent) showToast('📴 Estás sin conexión a internet (Modo Offline activo).');
     return null;
   }
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3000);
-    const isGhPages = window.location.hostname.endsWith('github.io');
-    const urlToFetch = (isGhPages ? './tunnel_sync.json' : GH_PAGES_DISCOVERY_URL) + '?t=' + Date.now();
-    const res = await fetch(urlToFetch, { signal: ctrl.signal, cache: 'no-store' });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const encData = await res.json();
-    const decryptedUrl = await decryptTunnelSyncPayload(encData, secret);
-    if (decryptedUrl && decryptedUrl.startsWith('https://')) {
-      const prev = localStorage.getItem('melo_server_url') || '';
-      localStorage.setItem('melo_server_url', decryptedUrl);
-      const inp = document.getElementById('serverUrlInput');
-      if (inp) inp.value = decryptedUrl;
-      if (!silent || prev !== decryptedUrl) {
-        await syncWithServer(false);
-        if (isServerOnline && !silent) {
-          showToast('✅ ¡PC detectada y sincronizada automáticamente!');
-          closeServerModal();
-        }
+  if (!silent) {
+    showToast('🔍 Buscando túnel activo de tu PC...');
+  }
+  const decryptedUrl = await _resolveEncryptedTunnelUrl();
+  if (decryptedUrl) {
+    syncInFlight = false;
+    await syncWithServer(false);
+    if (isServerOnline) {
+      if (!silent) {
+        showToast('✅ ¡PC detectada y sincronizada automáticamente!');
+        closeServerModal();
       }
       return decryptedUrl;
     }
-  } catch (_) {}
+  }
   if (!silent) {
-    showToast('⚠️ No se detectó un túnel activo. Verifica que tu PC esté encendida.');
+    showToast('⚠️ Tu PC parece estar apagada o sin iniciar_pwa.bat abierto.');
   }
   return null;
 }
@@ -330,7 +367,7 @@ async function syncWithServer(tryTunnelDiscoveryOnFail = true) {
 
     let base = getServerBaseUrl();
     if (!base && localStorage.getItem('melo_pair_secret') && tryTunnelDiscoveryOnFail) {
-      base = (await discoverEncryptedTunnelNow(true)) || '';
+      base = (await _resolveEncryptedTunnelUrl()) || '';
     }
     if (!base) {
       isServerOnline = false;
@@ -395,15 +432,15 @@ async function syncWithServer(tryTunnelDiscoveryOnFail = true) {
     }
   } catch (_) {
     const wasOnline = isServerOnline;
+    const failedBase = getServerBaseUrl();
     isServerOnline = false;
-    // Si falló el túnel viejo pero tenemos clave de auto-emparejamiento, buscar el nuevo túnel cifrado en GitHub Pages
+    // Si falló el túnel viejo pero tenemos clave de auto-emparejamiento, buscar el nuevo túnel cifrado al instante
     if (tryTunnelDiscoveryOnFail && navigator.onLine && localStorage.getItem('melo_pair_secret')) {
-      syncInFlight = false;
-      const newUrl = await discoverEncryptedTunnelNow(true);
-      if (newUrl) {
+      const newUrl = await _resolveEncryptedTunnelUrl();
+      if (newUrl && newUrl !== failedBase) {
+        syncInFlight = false;
         return await syncWithServer(false);
       }
-      return;
     }
     if (wasOnline) {
       showToast('📴 Modo Offline activado • Tu progreso se sigue guardando en el teléfono');
@@ -427,8 +464,16 @@ function updateHeaderStatus() {
     txt.textContent = Number(totalMB) > 0 ? `PC Conectada • ${totalMB} MB Offline` : 'PC Conectada';
   } else {
     pill.classList.add('offline');
-    const syncBadge = pendingCount > 0 ? ` • ✓ Progreso guardado` : '';
-    txt.textContent = `Offline (${totalMB} MB)${syncBadge}`;
+    const needsPairing =
+      isStaticFrontendHost() &&
+      !localStorage.getItem('melo_pair_secret') &&
+      !localStorage.getItem('melo_server_url');
+    if (needsPairing) {
+      txt.textContent = '🔗 Toca para Vincular PC';
+    } else {
+      const syncBadge = pendingCount > 0 ? ` • ✓ Progreso guardado` : '';
+      txt.textContent = `Offline (${totalMB} MB)${syncBadge}`;
+    }
   }
 }
 
@@ -3225,7 +3270,18 @@ function closeServerModal() {
 }
 
 async function saveServerUrl() {
-  const raw = document.getElementById('serverUrlInput').value;
+  const raw = (document.getElementById('serverUrlInput').value || '').trim();
+
+  // Permitir pegar directamente el link de emparejamiento (#pair=...) o el código hexadecimal de 32 caracteres
+  const pairMatch = raw.match(/pair=([a-fA-F0-9]{24,64})/) || raw.match(/^([a-fA-F0-9]{24,64})$/);
+  if (pairMatch && pairMatch[1]) {
+    localStorage.setItem('melo_pair_secret', pairMatch[1].trim());
+    localStorage.removeItem('melo_server_url');
+    showToast('🔐 Dispositivo vinculado • Detectando túnel activo de tu PC...');
+    await discoverEncryptedTunnelNow(false);
+    return;
+  }
+
   const normalized = normalizeServerUrl(raw);
   if (normalized) {
     localStorage.setItem('melo_server_url', normalized);
