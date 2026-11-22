@@ -1,4 +1,4 @@
-const CACHE_NAME = 'melo-audiolibros-shell-v7';
+const CACHE_NAME = 'melo-audiolibros-shell-v8';
 const APP_SHELL = [
   './',
   './index.html',
